@@ -50,7 +50,3 @@ Para que el sistema respete las **reglas de seguridad** que definimos, el **Canv
 * **Colección Única:** Todo se guarda dentro de una colección llamada `tickets`.
 * **Diferenciador (`docType`):** Para no mezclar las cosas, el sistema etiqueta cada documento. Los productos tienen un campo `docType: "inventory"` y las órdenes tienen `docType: "request"`.
 * **Sincronización:** Si el administrador cambia un stock, el empleado lo ve reflejado en su pantalla al instante gracias a la tecnología *Real-time* de Firebase.
-
-Esta estructura asegura que la aplicación sea rápida, no pierda datos al cerrar el navegador y cumpla con los permisos de acceso de tu proyecto `tickets-2025hh`.
-
-¿Hay alguna función adicional que te gustaría integrar para mejorar el flujo de trabajo?
