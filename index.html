@@ -371,8 +371,8 @@
                         <div><h1 class="text-4xl font-black tracking-tighter text-slate-800 uppercase">Gestión</h1><p class="text-slate-400 font-medium mt-1">Panel de control de inventario</p></div>
                         <div class="flex gap-4">
                             <div class="flex bg-slate-100 p-1.5 rounded-2xl border border-slate-200 shadow-inner">
-                                <button onclick="window.setAdminTab('inventory')" class="px-5 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest ${state.adminTab === 'inventory' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-400'}">Inventario</button>
                                 <button onclick="window.setAdminTab('requests')" class="px-5 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest ${state.adminTab === 'requests' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-400'}">Solicitudes</button>
+                                <button onclick="window.setAdminTab('inventory')" class="px-5 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest ${state.adminTab === 'inventory' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-400'}">Inventario</button>
                                 <button onclick="window.setAdminTab('analytics')" class="px-5 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest ${state.adminTab === 'analytics' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-400'}">Analitica</button>
                             </div>
                             <button onclick="window.handleAdminLogout()" class="text-red-400 px-4 py-2 hover:bg-red-50 rounded-xl transition-all"><i data-lucide="log-out" class="w-6 h-6"></i></button>
