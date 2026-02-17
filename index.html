@@ -1,13 +1,15 @@
 <!DOCTYPE html>
-<html lang="es">
+<html lang="do">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OfiStock Pro - Inteligencia de Inventario</title>
+    <title>Ofi-Heinsen</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
-    <!-- Librería para Gráficas -->
+    <!-- Librerías para Gráficas y PDF -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.25/jspdf.plugin.autotable.min.js"></script>
     
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-app.js";
@@ -27,8 +29,7 @@
         };
 
         const appId = "tickets-2025hh"; 
-        const RECIPIENT_EMAIL = "soporte@harryheinsen.com";
-        const ADMIN_PASSWORD = "admin123";
+        const ADMIN_PASSWORD = "HandhelsV21,";
 
         let auth, db, stockChart = null;
 
@@ -36,8 +37,8 @@
         let state = {
             user: null,
             view: 'employee', 
-            adminTab: 'inventory', // 'inventory' | 'requests' | 'analytics'
-            analyticsMode: 'stock', // 'stock' | 'department' | 'category'
+            adminTab: 'inventory',
+            analyticsMode: 'stock',
             isAdminAuthenticated: false,
             inventory: [],
             requests: [],
@@ -46,7 +47,67 @@
             department: '',
             isLoading: true,
             isSubmitting: false,
-            editingProduct: null
+            editingProduct: null,
+            listenersActive: false
+        };
+
+        // --- Utilidad PDF ---
+        const generateRequestPDF = (data) => {
+            const { jsPDF } = window.jspdf;
+            const doc = new jsPDF();
+            
+            // Estilos de encabezado
+            doc.setFillColor(37, 99, 235); // Azul Heinsen
+            doc.rect(0, 0, 210, 40, 'F');
+            
+            doc.setTextColor(255, 255, 255);
+            doc.setFontSize(22);
+            doc.setFont("helvetica", "bold");
+            doc.text("OfiHeinsen", 20, 25);
+            
+            doc.setFontSize(10);
+            doc.text("COMPROBANTE DE SOLICITUD DE INSUMOS", 20, 32);
+
+            // Información de la solicitud
+            doc.setTextColor(50, 50, 50);
+            doc.setFontSize(12);
+            doc.setFont("helvetica", "bold");
+            doc.text("Detalles del Solicitante", 20, 55);
+            
+            doc.setFont("helvetica", "normal");
+            doc.setFontSize(10);
+            doc.text(`Solicitante: ${data.employee}`, 20, 65);
+            doc.text(`Departamento: ${data.department}`, 20, 72);
+            doc.text(`Fecha: ${data.date}`, 20, 79);
+            doc.text(`ID Transacción: ${Math.random().toString(36).substr(2, 9).toUpperCase()}`, 20, 86);
+
+            // Tabla de Insumos
+            const tableBody = data.items.map(item => [
+                item.name,
+                item.quantity,
+                item.unit || 'uds'
+            ]);
+
+            doc.autoTable({
+                startY: 95,
+                head: [['Descripción del Insumo', 'Cantidad', 'Unidad']],
+                body: tableBody,
+                headStyles: { fillColor: [37, 99, 235], fontStyle: 'bold' },
+                alternateRowStyles: { fillColor: [245, 247, 250] },
+                margin: { left: 20, right: 20 }
+            });
+
+            // Pie de página
+            const finalY = doc.lastAutoTable.finalY + 30;
+            doc.setDrawColor(200, 200, 200);
+            doc.line(20, finalY, 80, finalY);
+            doc.line(130, finalY, 190, finalY);
+            
+            doc.setFontSize(8);
+            doc.text("Firma Solicitante", 35, finalY + 5);
+            doc.text("Firma Despacho", 145, finalY + 5);
+
+            doc.save(`Solicitud_${data.employee.replace(/\s+/g, '_')}_${Date.now()}.pdf`);
         };
 
         // --- Notificaciones ---
@@ -116,8 +177,10 @@
                     userId: state.user.uid
                 };
                 
+                // 1. Guardar en Firestore
                 await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'tickets'), requestData);
 
+                // 2. Actualizar stock
                 for (const cartItem of state.cart) {
                     const itemRef = doc(db, 'artifacts', appId, 'public', 'data', 'tickets', cartItem.id);
                     const currentInv = state.inventory.find(i => i.id === cartItem.id);
@@ -126,16 +189,18 @@
                     }
                 }
 
-                const subject = encodeURIComponent(`SOLICITUD: ${requestData.employee}`);
-                const body = encodeURIComponent(`SOLICITANTE: ${requestData.employee}\nDEPTO: ${requestData.department}\n\nINSUMOS:\n` + requestData.items.map(i => `• ${i.name}: ${i.quantity}`).join('\n'));
-                window.location.href = `mailto:${RECIPIENT_EMAIL}?subject=${subject}&body=${body}`;
+                // 3. Generar PDF
+                generateRequestPDF(requestData);
 
+                // 4. Limpiar estado
                 state.cart = [];
                 state.employeeName = "";
                 state.department = "";
-                notify("Solicitud y reporte generados");
+                notify("Solicitud procesada y PDF generado");
+
             } catch (e) {
-                notify("Error de red", "error");
+                console.error(e);
+                notify("Error al procesar", "error");
             } finally {
                 state.isSubmitting = false;
                 render();
@@ -164,91 +229,40 @@
                 closeModal();
                 notify("Inventario sincronizado");
             } catch (e) {
-                notify("Error de permisos", "error");
+                notify("Error de permisos en Firestore", "error");
             }
         };
 
-        // --- Gráficas Avanzadas ---
+        // --- Gráficas ---
         const initChart = () => {
             const ctx = document.getElementById('stockChartCanvas')?.getContext('2d');
             if (!ctx) return;
-
             if (stockChart) stockChart.destroy();
 
             let chartData = { labels: [], datasets: [] };
-            let chartOptions = {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: { legend: { position: 'top', labels: { font: { weight: 'bold' } } } }
-            };
-
             if (state.analyticsMode === 'stock') {
-                // Gráfica de Stock Actual vs Mínimo
                 chartData.labels = state.inventory.map(i => i.name);
-                chartData.datasets = [
-                    {
-                        label: 'Stock Actual',
-                        data: state.inventory.map(i => i.stock),
-                        backgroundColor: state.inventory.map(i => i.stock <= (i.minStock || 0) ? 'rgba(239, 68, 68, 0.8)' : 'rgba(59, 130, 246, 0.8)'),
-                        borderRadius: 8,
-                    },
-                    {
-                        label: 'Mínimo de Reposición',
-                        data: state.inventory.map(i => i.minStock || 0),
-                        type: 'line',
-                        borderColor: '#94a3b8',
-                        borderDash: [5, 5],
-                        fill: false
-                    }
-                ];
+                chartData.datasets = [{
+                    label: 'Stock Actual',
+                    data: state.inventory.map(i => i.stock),
+                    backgroundColor: state.inventory.map(i => i.stock <= (i.minStock || 0) ? 'rgba(239, 68, 68, 0.8)' : 'rgba(59, 130, 246, 0.8)'),
+                    borderRadius: 8,
+                }];
             } else if (state.analyticsMode === 'department') {
-                // Consumo por Departamento
                 const deptStats = {};
                 state.requests.forEach(req => {
                     const dept = req.department || 'Sin Depto';
                     const totalQty = req.items.reduce((sum, item) => sum + (item.quantity || 0), 0);
                     deptStats[dept] = (deptStats[dept] || 0) + totalQty;
                 });
-
                 chartData.labels = Object.keys(deptStats);
-                chartData.datasets = [{
-                    label: 'Items Totales Consumidos',
-                    data: Object.values(deptStats),
-                    backgroundColor: 'rgba(139, 92, 246, 0.8)',
-                    borderRadius: 8
-                }];
-            } else if (state.analyticsMode === 'category') {
-                // Consumo por Categoría
-                const catStats = {};
-                state.requests.forEach(req => {
-                    req.items.forEach(item => {
-                        // Buscamos la categoría en el inventario actual usando el nombre o ID
-                        const invItem = state.inventory.find(i => i.id === item.id || i.name === item.name);
-                        const category = invItem ? invItem.category : 'Otros';
-                        catStats[category] = (catStats[category] || 0) + (item.quantity || 0);
-                    });
-                });
-
-                chartData.labels = Object.keys(catStats);
-                chartData.datasets = [{
-                    label: 'Consumo por Categoría',
-                    data: Object.values(catStats),
-                    backgroundColor: [
-                        'rgba(59, 130, 246, 0.7)',
-                        'rgba(16, 185, 129, 0.7)',
-                        'rgba(245, 158, 11, 0.7)',
-                        'rgba(239, 68, 68, 0.7)',
-                        'rgba(139, 92, 246, 0.7)'
-                    ],
-                    borderWidth: 0
-                }];
-                chartOptions.scales = { x: { display: true }, y: { beginAtZero: true } };
+                chartData.datasets = [{ label: 'Items Consumidos', data: Object.values(deptStats), backgroundColor: 'rgba(139, 92, 246, 0.8)', borderRadius: 8 }];
             }
 
             stockChart = new Chart(ctx, {
-                type: state.analyticsMode === 'category' ? 'doughnut' : 'bar',
+                type: 'bar',
                 data: chartData,
-                options: chartOptions
+                options: { responsive: true, maintainAspectRatio: false }
             });
         };
 
@@ -258,10 +272,7 @@
             if (!root) return;
 
             if (state.isLoading) {
-                root.innerHTML = `<div class="h-96 flex flex-col items-center justify-center gap-4 text-slate-300">
-                    <i data-lucide="loader-2" class="animate-spin w-12 h-12 text-blue-500"></i>
-                    <p class="font-black uppercase tracking-widest text-xs">Cargando base de datos...</p>
-                </div>`;
+                root.innerHTML = `<div class="h-96 flex flex-col items-center justify-center gap-4 text-slate-300"><i data-lucide="loader-2" class="animate-spin w-12 h-12 text-blue-500"></i><p class="font-black uppercase tracking-widest text-xs">Sincronizando...</p></div>`;
                 lucide.createIcons();
                 return;
             }
@@ -278,8 +289,8 @@
                 <div class="grid grid-cols-1 lg:grid-cols-3 gap-8 animate-in">
                     <div class="lg:col-span-2 space-y-6">
                         <header>
-                            <h1 class="text-4xl font-black text-slate-800 tracking-tighter">Solicitar Materiales</h1>
-                            <p class="text-slate-500 mt-2 font-medium italic">Suministros tickets-2025hh</p>
+                            <h1 class="text-4xl font-black text-slate-800 tracking-tighter">Seleccione Insumos</h1>
+                            <p class="text-slate-500 mt-2 font-medium italic">Seleccione los artículos necesarios</p>
                         </header>
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                             ${state.inventory.map(item => `
@@ -302,23 +313,23 @@
                     </div>
 
                     <div class="bg-white p-8 rounded-[2.5rem] border border-slate-200 h-fit sticky top-24 shadow-2xl border-t-[12px] border-t-blue-600">
-                        <h2 class="text-2xl font-black mb-8 flex items-center gap-3 tracking-tighter"><i data-lucide="shopping-cart" class="text-blue-600"></i> Mi Solicitud</h2>
+                        <h2 class="text-2xl font-black mb-8 flex items-center gap-3 tracking-tighter"><i data-lucide="shopping-cart" class="text-blue-600"></i>Listado</h2>
                         <div class="space-y-4 mb-8">
-                            <input id="employeeName" value="${state.employeeName}" onchange="window.state.employeeName = this.value" placeholder="Nombre" class="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl outline-none focus:ring-4 focus:ring-blue-50 font-bold" />
+                            <input id="employeeName" value="${state.employeeName}" onchange="window.state.employeeName = this.value" placeholder="Solicitante" class="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl outline-none focus:ring-4 focus:ring-blue-50 font-bold" />
                             <select id="departmentSelect" onchange="window.state.department = this.value" class="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl outline-none focus:ring-4 focus:ring-blue-50 font-bold">
                                 <option value="">Departamento...</option>
                                 ${['Administración', 'Almacén', 'Cobros', 'Contabilidad', 'Operaciones', 'Recepción', 'Tecnología', 'Trafico', 'Ventas'].map(d => `<option value="${d}" ${state.department === d ? 'selected' : ''}>${d}</option>`).join('')}
                             </select>
                         </div>
                         <div class="divide-y divide-slate-100 max-h-72 overflow-y-auto pr-2 custom-scrollbar">
-                            ${state.cart.length === 0 ? '<p class="text-center py-10 text-slate-300 font-bold text-xs tracking-widest uppercase">Carrito vacío</p>' : state.cart.map(item => `
+                            ${state.cart.length === 0 ? '<p class="text-center py-10 text-slate-300 font-bold text-xs tracking-widest uppercase italic">Seleccionado</p>' : state.cart.map(item => `
                                 <div class="py-5 flex justify-between items-center">
                                     <div class="flex-1">
                                         <p class="font-black text-slate-800 text-sm leading-tight">${item.name}</p>
                                         <div class="flex items-center gap-4 mt-3">
-                                            <button onclick="window.updateCartQuantity('${item.id}', -1)" class="w-8 h-8 rounded-xl bg-slate-100 hover:bg-slate-200 flex items-center justify-center transition-all"><i data-lucide="minus" class="w-3.5 h-3.5"></i></button>
+                                            <button onclick="window.updateCartQuantity('${item.id}', -1)" class="w-8 h-8 rounded-xl bg-slate-100 hover:bg-slate-200 flex items-center justify-center transition-all shadow-sm active:scale-90"><i data-lucide="minus" class="w-3.5 h-3.5"></i></button>
                                             <span class="font-black text-blue-600 text-lg">${item.quantity}</span>
-                                            <button onclick="window.updateCartQuantity('${item.id}', 1)" class="w-8 h-8 rounded-xl bg-slate-100 hover:bg-slate-200 flex items-center justify-center transition-all"><i data-lucide="plus" class="w-3.5 h-3.5"></i></button>
+                                            <button onclick="window.updateCartQuantity('${item.id}', 1)" class="w-8 h-8 rounded-xl bg-slate-100 hover:bg-slate-200 flex items-center justify-center transition-all shadow-sm active:scale-90"><i data-lucide="plus" class="w-3.5 h-3.5"></i></button>
                                         </div>
                                     </div>
                                     <button onclick="window.updateCartQuantity('${item.id}', -${item.quantity})" class="text-red-300 hover:text-red-500 p-2 transition-all"><i data-lucide="trash-2" class="w-5 h-5"></i></button>
@@ -326,9 +337,12 @@
                             `).join('')}
                         </div>
                         ${state.cart.length > 0 ? `
-                            <button onclick="window.submitRequest()" ${state.isSubmitting ? 'disabled' : ''} class="w-full mt-10 bg-green-600 text-white py-5 rounded-3xl font-black hover:bg-green-700 shadow-xl flex items-center justify-center gap-3 active:scale-95 transition-all">
-                                ${state.isSubmitting ? '<i data-lucide="loader-2" class="animate-spin w-6 h-6"></i>' : '<i data-lucide="send" class="w-6 h-6"></i>'}
-                                Procesar Reporte
+                            <button onclick="window.submitRequest()" ${state.isSubmitting ? 'disabled' : ''} class="w-full mt-10 bg-green-600 text-white py-5 rounded-3xl font-black hover:bg-green-700 shadow-xl flex flex-col items-center justify-center gap-1 active:scale-95 transition-all">
+                                <div class="flex items-center gap-2">
+                                    ${state.isSubmitting ? '<i data-lucide="loader-2" class="animate-spin w-6 h-6"></i>' : '<i data-lucide="file-text" class="w-6 h-6"></i>'}
+                                    <span class="text-lg">Procesar y PDF</span>
+                                </div>
+                                <span class="text-[10px] opacity-70 uppercase tracking-widest">Descarga automática</span>
                             </button>
                         ` : ''}
                     </div>
@@ -344,7 +358,7 @@
                         <h2 class="text-3xl font-black mb-8 tracking-tighter text-slate-800">Panel Maestro</h2>
                         <form id="adminLoginForm" onsubmit="window.handleAdminLogin(event)" class="space-y-6">
                             <input type="password" id="adminPwd" class="w-full p-5 bg-slate-50 border-2 border-slate-100 rounded-3xl outline-none focus:border-indigo-500 text-center text-3xl font-bold tracking-[0.5em]" placeholder="••••" />
-                            <button type="submit" class="w-full bg-indigo-600 text-white py-5 rounded-[2rem] font-black hover:bg-indigo-700 shadow-2xl text-lg transition-all">Entrar</button>
+                            <button type="submit" class="w-full bg-indigo-600 text-white py-5 rounded-[2rem] font-black hover:bg-indigo-700 shadow-2xl text-lg transition-all">Ingresar</button>
                         </form>
                     </div>
                 `;
@@ -354,12 +368,12 @@
             root.innerHTML = `
                 <div class="space-y-8 animate-in">
                     <header class="flex flex-wrap justify-between items-end gap-6 border-b border-slate-200 pb-8">
-                        <div><h1 class="text-4xl font-black tracking-tighter text-slate-800 uppercase italic">Administración</h1><p class="text-slate-400 font-medium mt-1">Conexión activa Cloud</p></div>
+                        <div><h1 class="text-4xl font-black tracking-tighter text-slate-800 uppercase">Gestión</h1><p class="text-slate-400 font-medium mt-1">Panel de control de inventario</p></div>
                         <div class="flex gap-4">
                             <div class="flex bg-slate-100 p-1.5 rounded-2xl border border-slate-200 shadow-inner">
                                 <button onclick="window.setAdminTab('inventory')" class="px-5 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest ${state.adminTab === 'inventory' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-400'}">Inventario</button>
-                                <button onclick="window.setAdminTab('analytics')" class="px-5 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest ${state.adminTab === 'analytics' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-400'}">Analíticas</button>
                                 <button onclick="window.setAdminTab('requests')" class="px-5 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest ${state.adminTab === 'requests' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-400'}">Solicitudes</button>
+                                <button onclick="window.setAdminTab('analytics')" class="px-5 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest ${state.adminTab === 'analytics' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-400'}">Analitica</button>
                             </div>
                             <button onclick="window.handleAdminLogout()" class="text-red-400 px-4 py-2 hover:bg-red-50 rounded-xl transition-all"><i data-lucide="log-out" class="w-6 h-6"></i></button>
                         </div>
@@ -368,13 +382,13 @@
                     ${state.adminTab === 'inventory' ? `
                         <div class="space-y-6">
                             <div class="flex justify-between items-center px-4">
-                                <h2 class="text-2xl font-black flex items-center gap-3 tracking-tighter"><i data-lucide="layout-dashboard" class="text-indigo-500"></i> Existencias</h2>
-                                <button onclick="window.openModal()" class="bg-indigo-600 text-white px-7 py-3 rounded-2xl font-black hover:bg-indigo-700 shadow-xl transition-all"><i data-lucide="plus" class="w-5 h-5"></i> Nuevo</button>
+                                <h2 class="text-2xl font-black flex items-center gap-3 tracking-tighter"><i data-lucide="layers" class="text-indigo-500"></i>Catálogo Insumos</h2>
+                                <button onclick="window.openModal()" class="bg-indigo-600 text-white px-7 py-3 rounded-2xl font-black hover:bg-indigo-700 shadow-xl transition-all"></i>Nuevo</button>
                             </div>
                             <div class="bg-white rounded-[3rem] border border-slate-200 shadow-sm overflow-hidden overflow-x-auto">
                                 <table class="w-full text-left">
                                     <thead class="text-slate-400 font-black border-b border-slate-100 bg-white text-[10px] uppercase tracking-widest">
-                                        <tr><th class="px-10 py-7">Insumo</th><th class="px-10 py-7">Stock / Mínimo</th><th class="px-10 py-7 text-center">Estado</th><th class="px-10 py-7 text-right">Gestión</th></tr>
+                                        <tr><th class="px-10 py-7">Insumo</th><th class="px-10 py-7">Existencia</th><th class="px-10 py-7 text-center">Estatus</th><th class="px-10 py-7 text-right">Acciones</th></tr>
                                     </thead>
                                     <tbody class="divide-y divide-slate-50">
                                         ${state.inventory.map(item => `
@@ -389,7 +403,7 @@
                                                 </td>
                                                 <td class="px-10 py-7 text-center">
                                                     <span class="px-3 py-1 rounded-full text-[10px] font-black uppercase ${item.stock <= (item.minStock || 0) ? 'bg-red-100 text-red-700 animate-pulse' : 'bg-green-100 text-green-700'}">
-                                                        ${item.stock <= (item.minStock || 0) ? 'Reposición' : 'Óptimo'}
+                                                        ${item.stock <= (item.minStock || 0) ? 'Reposición' : 'OK'}
                                                     </span>
                                                 </td>
                                                 <td class="px-10 py-7 text-right">
@@ -404,34 +418,14 @@
                                 </table>
                             </div>
                         </div>
-                    ` : state.adminTab === 'analytics' ? `
-                        <div class="space-y-6 animate-in">
-                            <div class="flex flex-wrap items-center justify-between gap-4 px-4">
-                                <h2 class="text-2xl font-black flex items-center gap-3 tracking-tighter text-slate-800"><i data-lucide="pie-chart" class="text-indigo-500"></i> Panel de Inteligencia</h2>
-                                <div class="flex bg-slate-200 p-1 rounded-2xl shadow-inner">
-                                    <button onclick="window.setAnalyticsMode('stock')" class="px-4 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-tighter transition-all ${state.analyticsMode === 'stock' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500'}">Stock</button>
-                                    <button onclick="window.setAnalyticsMode('department')" class="px-4 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-tighter transition-all ${state.analyticsMode === 'department' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500'}">Departamentos</button>
-                                    <button onclick="window.setAnalyticsMode('category')" class="px-4 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-tighter transition-all ${state.analyticsMode === 'category' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500'}">Categorías</button>
-                                </div>
-                            </div>
-                            <div class="bg-white p-10 rounded-[3rem] border border-slate-200 shadow-sm min-h-[500px] flex flex-col">
-                                <div class="mb-4">
-                                    <h3 class="text-lg font-black text-slate-800 uppercase tracking-widest">${state.analyticsMode === 'stock' ? 'Comparativa Stock Real vs Mínimo' : state.analyticsMode === 'department' ? 'Ranking de Consumo por Departamento' : 'Distribución de Consumo por Categoría'}</h3>
-                                    <p class="text-xs text-slate-400 font-medium">Datos calculados en tiempo real desde Firestore.</p>
-                                </div>
-                                <div class="flex-1 relative">
-                                    <canvas id="stockChartCanvas"></canvas>
-                                </div>
-                            </div>
-                        </div>
-                    ` : `
-                        <div class="space-y-6">
-                            <h2 class="text-2xl font-black px-4 flex items-center gap-3 tracking-tighter"><i data-lucide="clipboard-list" class="text-orange-500"></i> Cola de Despacho</h2>
+                    ` : state.adminTab === 'requests' ? `
+                         <div class="space-y-6">
+                            <h2 class="text-2xl font-black px-4 flex items-center gap-3 tracking-tighter text-orange-500"><i data-lucide="truck"></i> Cola de Despacho</h2>
                             <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
                                 ${state.requests.map(req => `
                                     <div class="bg-white p-8 rounded-[3rem] border shadow-sm transition-all relative ${req.status === 'Entregado' ? 'border-green-100 opacity-60' : 'border-slate-200 border-l-[16px] border-l-orange-400'}">
                                         <div class="flex justify-between items-start mb-8">
-                                            <div><h4 class="font-black text-slate-800 text-xl leading-tight group-hover:text-blue-600">${req.employee}</h4><p class="text-[10px] text-slate-400 font-black uppercase mt-3 tracking-widest">${req.department}</p></div>
+                                            <div><h4 class="font-black text-slate-800 text-xl leading-tight">${req.employee}</h4><p class="text-[10px] text-slate-400 font-black uppercase mt-3 tracking-widest">${req.department}</p></div>
                                             <span class="text-[9px] font-black px-4 py-2 rounded-full uppercase tracking-widest ${req.status === 'Entregado' ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'}">${req.status}</span>
                                         </div>
                                         <div class="bg-slate-50 p-6 rounded-[2rem] mb-6 space-y-3 border border-slate-100 shadow-inner">
@@ -445,12 +439,25 @@
                                 `).join('')}
                             </div>
                         </div>
+                    ` : `
+                        <div class="space-y-6">
+                             <div class="flex items-center justify-between px-4">
+                                <h2 class="text-2xl font-black tracking-tighter text-slate-800"><i data-lucide="bar-chart-3" class="text-indigo-500 inline mr-2"></i>Métricas de Consumo</h2>
+                                <div class="flex bg-slate-200 p-1 rounded-2xl shadow-inner">
+                                    <button onclick="window.setAnalyticsMode('stock')" class="px-4 py-1.5 rounded-xl text-[10px] font-black uppercase transition-all ${state.analyticsMode === 'stock' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500'}">Stock</button>
+                                    <button onclick="window.setAnalyticsMode('department')" class="px-4 py-1.5 rounded-xl text-[10px] font-black uppercase transition-all ${state.analyticsMode === 'department' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500'}">Depto</button>
+                                </div>
+                             </div>
+                             <div class="bg-white p-10 rounded-[3rem] border border-slate-200 shadow-sm h-[500px]">
+                                <canvas id="stockChartCanvas"></canvas>
+                             </div>
+                        </div>
                     `}
                 </div>
             `;
         };
 
-        // --- Inicialización Robusta ---
+        // --- Inicialización ---
         const startApp = async () => {
             render();
             try {
@@ -458,84 +465,63 @@
                 auth = getAuth(appInstance);
                 db = getFirestore(appInstance);
 
-                const authResult = await signInAnonymously(auth);
-                state.user = authResult.user;
-
+                await signInAnonymously(auth);
+                
                 onAuthStateChanged(auth, (user) => {
                     if (user && !state.listenersActive) {
                         state.listenersActive = true;
                         initFirebaseListeners();
                     }
+                    state.user = user;
                 });
-
-                if (state.user && !state.listenersActive) {
-                    state.listenersActive = true;
-                    initFirebaseListeners();
-                }
-
             } catch (error) {
-                console.error("Firebase Init Error:", error);
+                console.error("Firebase Error:", error);
             }
         };
 
         const initFirebaseListeners = () => {
             const ticketsCol = collection(db, 'artifacts', appId, 'public', 'data', 'tickets');
-
             onSnapshot(ticketsCol, (snap) => {
                 const allDocs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
                 state.inventory = allDocs.filter(d => d.docType === 'inventory');
                 state.requests = allDocs.filter(d => d.docType === 'request').sort((a,b) => b.timestamp - a.timestamp);
                 state.isLoading = false;
                 render();
-            }, (err) => { 
-                console.error("Firestore Error:", err); 
-                notify("Error de permisos en Firestore.", "error"); 
-                state.isLoading = false;
-                render();
-            });
+            }, () => { state.isLoading = false; render(); });
         };
 
-        // Global functions
+        // Exposición global
         window.state = state;
         window.addToCart = addToCart;
         window.updateCartQuantity = updateCartQuantity;
         window.submitRequest = submitRequest;
         window.handleSaveProduct = handleSaveProduct;
-        window.handleDeleteProduct = async (id) => {
-            if (!confirm("¿Eliminar este registro permanentemente?")) return;
-            try { await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'tickets', id)); notify("Eliminado"); } catch (e) { notify("Error", "error"); }
-        };
-        window.updateRequestStatus = async (id, status) => {
-            try { await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'tickets', id), { status }); notify(`Estatus: ${status}`); } catch (e) { notify("Error de permisos", "error"); }
-        };
+        window.handleDeleteProduct = async (id) => { try { await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'tickets', id)); notify("Eliminado"); } catch (e) { notify("Error", "error"); } };
+        window.updateRequestStatus = async (id, status) => { try { await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'tickets', id), { status }); notify(`Estado: ${status}`); } catch (e) { notify("Error", "error"); } };
         window.openModal = (p) => {
             state.editingProduct = p;
-            const modal = document.getElementById('modal');
             const form = document.getElementById('productForm');
             form.name.value = p?.name || '';
             form.category.value = p?.category || '';
             form.stock.value = p?.stock || '';
             form.minStock.value = p?.minStock || '5';
             form.unit.value = p?.unit || 'uds';
-            document.getElementById('modalTitle').textContent = p ? 'Editar Insumo' : 'Nuevo Insumo';
-            modal.classList.remove('hidden');
+            document.getElementById('modalTitle').textContent = p ? 'Editar' : 'Nuevo';
+            document.getElementById('modal').classList.remove('hidden');
         };
-        window.closeModal = () => { state.editingProduct = null; document.getElementById('modal').classList.add('hidden'); };
+        window.closeModal = () => document.getElementById('modal').classList.add('hidden');
         window.setAdminTab = (tab) => { state.adminTab = tab; render(); };
         window.setAnalyticsMode = (mode) => { state.analyticsMode = mode; render(); };
-        window.handleAdminLogout = () => { state.isAdminAuthenticated = false; state.view = 'employee'; render(); notify("Sesión cerrada"); };
+        window.handleAdminLogout = () => { state.isAdminAuthenticated = false; state.view = 'employee'; render(); };
         window.handleAdminLogin = (e) => {
             e.preventDefault();
-            if (document.getElementById('adminPwd').value === ADMIN_PASSWORD) {
-                state.isAdminAuthenticated = true; notify("Autorizado");
-            } else { notify("Clave incorrecta", "error"); }
+            if (document.getElementById('adminPwd').value === ADMIN_PASSWORD) { state.isAdminAuthenticated = true; notify("Autorizado"); } else notify("Clave incorrecta", "error");
             render();
         };
-        window.setView = (v) => { state.view = v; state.isAdminAuthenticated = false; render(); };
-        window.handleEditBtn = (id) => { const product = state.inventory.find(i => i.id === id); window.openModal(product); };
+        window.setView = (v) => { state.view = v; render(); };
+        window.handleEditBtn = (id) => window.openModal(state.inventory.find(i => i.id === id));
 
         startApp();
-
     </script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap');
@@ -554,19 +540,20 @@
                 <div class="bg-blue-600 p-2 rounded-xl shadow-lg shadow-blue-100">
                     <i data-lucide="package" class="text-white w-5 h-5"></i>
                 </div>
-                <span class="font-black text-xl text-slate-800 tracking-tight tracking-tighter">Ofi<span class="text-blue-600 tracking-tight">Stock</span></span>
+                <span class="font-black text-xl text-slate-800 tracking-tight tracking-tighter">Ofi-<span class="text-blue-600 tracking-tight">Heinsen</span></span>
             </div>
             <div class="flex bg-slate-100 p-1 rounded-2xl border border-slate-200 shadow-inner">
-                <button onclick="window.setView('employee')" id="nav-emp" class="px-6 py-2 rounded-xl text-xs font-black uppercase tracking-widest transition-all">Empleado</button>
-                <button onclick="window.setView('admin')" id="nav-adm" class="px-6 py-2 rounded-xl text-xs font-black uppercase tracking-widest transition-all">Admin</button>
+                <button onclick="window.setView('employee')" class="px-6 py-2 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${state.view === 'employee' ? 'bg-white shadow-sm text-blue-600' : 'text-slate-400'}">Empleado</button>
+                <button onclick="window.setView('admin')" class="px-6 py-2 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${state.view === 'admin' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-400'}">Admin</button>
             </div>
         </div>
     </nav>
 
     <main id="app-content" class="max-w-6xl mx-auto px-4 py-8 min-h-[60vh]">
-        <!-- Inyectado dinámicamente -->
+        <!-- Inyección dinámica -->
     </main>
 
+    <!-- Modal Formulario -->
     <div id="modal" class="hidden fixed inset-0 bg-slate-900/80 backdrop-blur-xl z-50 flex items-center justify-center p-4">
         <div class="bg-white w-full max-w-md rounded-[3.5rem] shadow-2xl animate-in">
             <form id="productForm" onsubmit="window.handleSaveProduct(event)" class="p-10 space-y-8">
@@ -576,8 +563,8 @@
                 </div>
                 <div class="space-y-6">
                     <div class="space-y-1">
-                        <label class="text-[10px] font-black uppercase text-slate-400 ml-3 tracking-widest">Nombre Insumo</label>
-                        <input name="name" required class="w-full p-5 bg-slate-50 border border-slate-200 rounded-3xl outline-none focus:ring-4 focus:ring-indigo-50 font-bold text-lg" />
+                        <label class="text-[10px] font-black uppercase text-slate-400 ml-3 tracking-widest">Nombre</label>
+                        <input name="name" required class="w-full p-5 bg-slate-50 border border-slate-200 rounded-3xl outline-none focus:ring-4 focus:ring-indigo-50 font-bold" />
                     </div>
                     <div class="space-y-1">
                         <label class="text-[10px] font-black uppercase text-slate-400 ml-3 tracking-widest">Categoría</label>
@@ -585,20 +572,20 @@
                     </div>
                     <div class="flex gap-4">
                         <div class="flex-1 space-y-1">
-                            <label class="text-[10px] font-black uppercase text-slate-400 ml-3 tracking-widest">Stock Real</label>
+                            <label class="text-[10px] font-black uppercase text-slate-400 ml-3 tracking-widest">Existencia</label>
                             <input name="stock" type="number" required class="w-full p-5 bg-slate-50 border border-slate-200 rounded-3xl outline-none focus:ring-4 focus:ring-indigo-50 font-black text-center" />
                         </div>
                         <div class="flex-1 space-y-1">
-                            <label class="text-[10px] font-black uppercase text-slate-400 ml-3 tracking-widest text-red-500">Stock Mínimo</label>
+                            <label class="text-[10px] font-black uppercase text-slate-400 ml-3 tracking-widest text-red-500">Mínimo</label>
                             <input name="minStock" type="number" required class="w-full p-5 bg-red-50 border border-red-200 rounded-3xl outline-none focus:ring-4 focus:ring-red-100 font-black text-center text-red-600" />
                         </div>
                     </div>
                     <div class="space-y-1">
-                        <label class="text-[10px] font-black uppercase text-slate-400 ml-3 tracking-widest">Unidad (uds, cajas, resmas)</label>
-                        <input name="unit" required class="w-full p-5 bg-slate-50 border border-slate-200 rounded-3xl outline-none focus:ring-4 focus:ring-indigo-50 font-bold" />
+                        <label class="text-[10px] font-black uppercase text-slate-400 ml-3 tracking-widest">Unidad</label>
+                        <input name="unit" required placeholder="uds, cajas, etc" class="w-full p-5 bg-slate-50 border border-slate-200 rounded-3xl outline-none focus:ring-4 focus:ring-indigo-50 font-bold" />
                     </div>
                 </div>
-                <button type="submit" class="w-full bg-indigo-600 text-white py-6 rounded-[2.5rem] font-black hover:bg-indigo-700 shadow-2xl text-xl transition-all">Sincronizar Cloud</button>
+                <button type="submit" class="w-full bg-indigo-600 text-white py-6 rounded-[2.5rem] font-black hover:bg-indigo-700 shadow-2xl text-xl transition-all">Sincronizar</button>
             </form>
         </div>
     </div>
